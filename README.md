@@ -6,7 +6,7 @@ The build already produces signed SLSA provenance and an SBOM attestation, and G
 
 ## What the pipeline does
 
-The workflow is [`.github/workflows/build.yml`](.github/workflows/build.yml). It runs on every push to `main` and on pull requests from this repository.
+The workflow is [`.github/workflows/build.yml`](.github/workflows/build.yml). It runs on every push to `main`, so a pull request runs it when it merges.
 
 1. **Build and push the image.** [`main.go`](main.go) is a one-route web server. The image goes to `ghcr.io/kosli-labs/intoto-github-demo`, tagged with the commit SHA. Everything after this step names the image by the digest the push returned.
 2. **Attest the provenance.** `actions/attest` writes a SLSA provenance statement for that digest, signs it with a short-lived Sigstore certificate that names this workflow, logs the signature in the Rekor transparency log, and stores the attestation with GitHub.
@@ -35,5 +35,3 @@ In a copy of this repository without those two settings, steps 5 to 7 are skippe
 2. **The attestations GitHub holds**, on the repository's [Attestations page](https://github.com/kosli-labs/intoto-github-demo/attestations). Each run adds two for its image: one with the predicate type `https://slsa.dev/provenance/v1`, one with `https://spdx.dev/Document/v2.3`. Open one to see the subject digest, the workflow that signed it, and the commit it was built from.
 3. **The transparency log entry**, at the `search.sigstore.dev` link from the **Attest** step's log. This is a public record, outside both GitHub and Kosli, that this workflow signed an attestation for this digest at this time.
 4. **The trail in Kosli**, at `https://app.kosli.com/in-toto-demo/flows/intoto-github-demo/trails/<commit sha>`. The **Begin the Kosli trail** step's log prints the trail's name. The artifact `app` has the image's digest as its fingerprint and an `sbom` attestation. Both carry what verification established as annotations: `verified`, `signer_identity`, `signer_issuer`, `log_index` and `integrated_time`. The provenance adds `builder_id`, `build_type` and `workflow`; the SBOM adds `sbom_format` and `sbom_sha256`. The `attestation` link on each goes to the same Rekor entry as step 3.
-
-On a pull request, GitHub builds the merge of the branch into `main`, so the commit SHA in the image tag, the provenance and the trail name is that merge commit's, and the signer is `build.yml@refs/pull/<number>/merge`.
