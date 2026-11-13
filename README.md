@@ -35,3 +35,19 @@ In a copy of this repository without those two settings, steps 5 to 7 are skippe
 2. **The attestations GitHub holds**, on the repository's [Attestations page](https://github.com/kosli-labs/intoto-github-demo/attestations). Each run adds two for its image: one with the predicate type `https://slsa.dev/provenance/v1`, one with `https://spdx.dev/Document/v2.3`. Open one to see the subject digest, the workflow that signed it, and the commit it was built from.
 3. **The transparency log entry**, at the `search.sigstore.dev` link from the **Attest** step's log. This is a public record, outside both GitHub and Kosli, that this workflow signed an attestation for this digest at this time.
 4. **The trail in Kosli**, at `https://app.kosli.com/in-toto-demo/flows/intoto-github-demo/trails/<commit sha>`. The **Begin the Kosli trail** step's log prints the trail's name. The artifact `app` has the image's digest as its fingerprint and an `sbom` attestation. Both carry what verification established as annotations: `verified`, `signer_identity`, `signer_issuer`, `log_index` and `integrated_time`. The provenance adds `builder_id`, `build_type` and `workflow`; the SBOM adds `sbom_format` and `sbom_sha256`. The `attestation` link on each goes to the same Rekor entry as step 3.
+
+## Make a change during a demo
+
+Each merge to `main` builds a new image with a new digest, and the pipeline attests and records that one.
+
+1. Edit the greeting in [`main.go`](main.go), the string `Hello from the in-toto GitHub demo`.
+2. Commit the change on a branch, open a pull request and merge it. The workflow doesn't run on the pull request, only on the push to `main` that the merge makes.
+3. Watch the run under [Actions](https://github.com/kosli-labs/intoto-github-demo/actions). It takes about a minute.
+
+The audience then sees, for the new commit:
+
+- a new digest in the log of **Build and push the image**
+- two new entries on the [Attestations page](https://github.com/kosli-labs/intoto-github-demo/attestations) for that digest, signed by `build.yml@refs/heads/main`, each with its own Rekor entry
+- a new trail in Kosli, named after the merge commit's SHA, where the artifact `app` has the new digest as its fingerprint and carries the new provenance and SBOM
+
+Re-running a finished run also produces a new digest, because the image records when it was built. That makes a re-run a quick way to repeat the demo without a code change. The provenance and trail then name the same commit as before.
