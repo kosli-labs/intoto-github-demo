@@ -1,0 +1,138 @@
+name: Build, attest and record in Kosli
+
+on:
+  push:
+    branches: [main]
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  KOSLI_ORG: ${{ vars.KOSLI_ORG }}
+  KOSLI_FLOW: intoto-github-demo
+  KOSLI_TRAIL: ${{ github.sha }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # push the image to ghcr.io
+      id-token: write      # actions/attest signs as this workflow
+      attestations: write  # actions/attest stores the attestations; kosli reads them back
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          # The provenance in this demo is the signed one actions/attest makes.
+          provenance: false
+
+      - name: Attest the image's provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+
+      - name: Generate an SBOM for the image
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/sbom.spdx.json
+          upload-artifact: false
+
+      - name: Attest the image's SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/sbom.spdx.json
+
+      # Everything below records in Kosli what the steps above attested. It is
+      # skipped until the KOSLI_API_TOKEN secret and the KOSLI_ORG variable are set.
+      - name: Check whether Kosli is configured
+        id: kosli
+        env:
+          KOSLI_API_TOKEN: ${{ secrets.KOSLI_API_TOKEN }}
+        run: |
+          if [ -n "${KOSLI_API_TOKEN}" ] && [ -n "${KOSLI_ORG}" ]; then
+            echo "configured=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::notice::Nothing is recorded in Kosli: set the KOSLI_API_TOKEN secret and the KOSLI_ORG variable."
+          fi
+
+      # Switch to kosli-dev/setup-cli-action once a released CLI has `kosli attest in-toto --source github`.
+      - name: Check out the Kosli CLI at a pinned commit of main
+        uses: actions/checkout@v7
+        with:
+          repository: kosli-dev/cli
+          ref: 5cc9ee11a25c08e78a1fe855a931a1921cf6e612
+          path: kosli-cli
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: kosli-cli/go.mod
+          cache-dependency-path: kosli-cli/go.sum
+
+      - name: Build the Kosli CLI
+        working-directory: kosli-cli
+        run: |
+          go build -o "${RUNNER_TEMP}/bin/kosli" ./cmd/kosli
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/bin/kosli" attest in-toto --help | grep -- --source
+
+      - name: Create the Kosli flow
+        if: steps.kosli.outputs.configured == 'true'
+        env:
+          KOSLI_API_TOKEN: ${{ secrets.KOSLI_API_TOKEN }}
+        run: |
+          kosli create flow "${KOSLI_FLOW}" \
+            --description "An image attested by actions/attest, recorded with kosli attest in-toto" \
+            --template-file kosli-flow.yml
+
+      - name: Begin the Kosli trail
+        if: steps.kosli.outputs.configured == 'true'
+        env:
+          KOSLI_API_TOKEN: ${{ secrets.KOSLI_API_TOKEN }}
+        run: kosli begin trail "${KOSLI_TRAIL}"
+
+      # `--source github` reads the attestation back from GitHub by the image's
+      # digest, so no bundle file is passed between steps. The CLI verifies the
+      # signature before recording it. In GitHub Actions it looks in this
+      # repository and expects one of its workflows as the signer, and
+      # `--source github` is itself the default: it is spelled out for the demo.
+      - name: Record the provenance in Kosli, as the artifact named app
+        if: steps.kosli.outputs.configured == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          KOSLI_API_TOKEN: ${{ secrets.KOSLI_API_TOKEN }}
+          KOSLI_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          kosli attest in-toto "${IMAGE}@${DIGEST}" \
+            --artifact-type oci \
+            --source github \
+            --predicate-type provenance \
+            --name app
+
+      - name: Record the SBOM in Kosli, as app.sbom
+        if: steps.kosli.outputs.configured == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          KOSLI_API_TOKEN: ${{ secrets.KOSLI_API_TOKEN }}
+          KOSLI_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          kosli attest in-toto "${IMAGE}@${DIGEST}" \
+            --artifact-type oci \
+            --source github \
+            --predicate-type sbom \
+            --name app.sbom
